@@ -159,7 +159,7 @@ fun applyDefaults(model: CIBuildModel, buildType: BaseGradleBuildType, gradleTas
     buildType.steps {
         extraSteps()
         checkCleanM2(os)
-        verifyTestFilesCleanup(daemon)
+        verifyTestFilesCleanup(daemon, os)
     }
 
     applyDefaultDependencies(model, buildType, notQuick)
@@ -195,7 +195,7 @@ fun applyTestDefaults(
     buildType.steps {
         extraSteps()
         checkCleanM2(os)
-        verifyTestFilesCleanup(daemon)
+        verifyTestFilesCleanup(daemon, os)
     }
 
     applyDefaultDependencies(model, buildType, notQuick)

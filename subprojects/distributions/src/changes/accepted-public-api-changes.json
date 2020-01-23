@@ -1,17 +1,19 @@
 {
     "acceptedApiChanges": [
         {
-            "type": "org.gradle.kotlin.dsl.ProjectExtensionsKt",
-            "member": "Method org.gradle.kotlin.dsl.ProjectExtensionsKt.repositories(org.gradle.api.initialization.dsl.ScriptHandler,kotlin.jvm.functions.Function1)",
-            "acceptation": "Restoring binary compatibility with 6.0",
-            "changes": []
+            "type": "org.gradle.plugins.signing.signatory.pgp.PgpSignatoryProvider",
+            "member": "Class org.gradle.plugins.signing.signatory.pgp.PgpSignatoryProvider",
+            "acceptation": "Introduced a new internal API interface for bridging with the security subproject",
+            "changes": [
+                "org.gradle.plugins.signing.signatory.internal.ConfigurableSignatoryProvider"
+            ]
         },
         {
-            "type": "org.gradle.kotlin.dsl.ScriptHandlerExtensionsKt",
-            "member": "Method org.gradle.kotlin.dsl.ScriptHandlerExtensionsKt.repositories(org.gradle.api.initialization.dsl.ScriptHandler,kotlin.jvm.functions.Function1)",
-            "acceptation": "Restoring binary compatibility with 6.0",
+            "type": "org.gradle.api.artifacts.repositories.RepositoryContentDescriptor",
+            "member": "Class org.gradle.api.artifacts.repositories.RepositoryContentDescriptor",
+            "acceptation": "A new super interface has been introduced but old methods preserved on this one",
             "changes": [
-                "Method has been removed"
+                "org.gradle.api.artifacts.repositories.InclusiveRepositoryContentDescriptor"
             ]
         }
     ]

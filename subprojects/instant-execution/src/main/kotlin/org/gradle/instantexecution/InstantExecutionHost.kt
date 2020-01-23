@@ -21,6 +21,8 @@ import org.gradle.api.internal.GradleInternal
 import org.gradle.api.internal.SettingsInternal
 import org.gradle.api.internal.initialization.ClassLoaderScope
 import org.gradle.api.internal.initialization.ScriptHandlerFactory
+import org.gradle.api.internal.initialization.ScriptHandlerInternal
+import org.gradle.api.internal.project.DefaultProjectRegistry
 import org.gradle.api.internal.project.IProjectFactory
 import org.gradle.api.internal.project.ProjectInternal
 import org.gradle.api.internal.project.ProjectStateRegistry
@@ -35,11 +37,12 @@ import org.gradle.initialization.ClassLoaderScopeRegistry
 import org.gradle.initialization.DefaultProjectDescriptor
 import org.gradle.initialization.DefaultSettings
 import org.gradle.initialization.NotifyingBuildLoader
-import org.gradle.initialization.PropertiesLoadingSettingsProcessor
 import org.gradle.initialization.SettingsLocation
 import org.gradle.initialization.SettingsPreparer
 import org.gradle.initialization.SettingsProcessor
 import org.gradle.initialization.TaskExecutionPreparer
+import org.gradle.instantexecution.initialization.InstantExecutionPropertiesLoader
+import org.gradle.instantexecution.initialization.InstantExecutionStartParameter
 import org.gradle.internal.build.BuildState
 import org.gradle.internal.file.PathToFileResolver
 import org.gradle.internal.operations.BuildOperationCategory
@@ -56,20 +59,11 @@ import java.io.File
 
 
 class InstantExecutionHost internal constructor(
+    private val startParameter: InstantExecutionStartParameter,
     private val gradle: GradleInternal,
     private val classLoaderScopeRegistry: ClassLoaderScopeRegistry,
     private val projectFactory: IProjectFactory
 ) : DefaultInstantExecution.Host {
-
-    private
-    val startParameter = gradle.startParameter
-
-    override val skipLoadingStateReason: String?
-        get() = if (startParameter.isRefreshDependencies) {
-            "--refresh-dependencies"
-        } else {
-            null
-        }
 
     override val currentBuild: ClassicModeBuild =
         DefaultClassicModeBuild()
@@ -79,13 +73,6 @@ class InstantExecutionHost internal constructor(
 
     override fun <T> getService(serviceType: Class<T>): T =
         gradle.services.get(serviceType)
-
-    override fun getSystemProperty(propertyName: String) =
-        startParameter.systemPropertiesArgs[propertyName] ?: System.getProperty(propertyName)
-
-    override val requestedTaskNames: List<String> = startParameter.taskNames
-
-    override val rootDir: File = startParameter.currentDir
 
     inner class DefaultClassicModeBuild : ClassicModeBuild {
         override val buildSrc: Boolean
@@ -104,17 +91,15 @@ class InstantExecutionHost internal constructor(
     inner class DefaultInstantExecutionBuild(
         override val gradle: GradleInternal,
         private val fileResolver: PathToFileResolver,
-        rootProjectName: String
+        private val rootProjectName: String
     ) : InstantExecutionBuild {
 
         init {
             gradle.run {
-                settings = createSettings()
                 // Fire build operation required by build scan to determine startup duration and settings evaluated duration
                 val settingsPreparer = BuildOperatingFiringSettingsPreparer(
                     SettingsPreparer {
-                        // Nothing to do
-                        // TODO:instant-execution - instead, create and attach the settings object
+                        settings = processSettings()
                     },
                     service<BuildOperationExecutor>(),
                     service<BuildDefinition>().fromBuild
@@ -122,58 +107,34 @@ class InstantExecutionHost internal constructor(
                 settingsPreparer.prepareSettings(this)
 
                 setBaseProjectClassLoaderScope(coreScope)
-                rootProject = createProject(null, rootProjectName)
-                defaultProject = rootProject
+                projectDescriptorRegistry.rootProject!!.name = rootProjectName
             }
         }
 
-        override fun createProject(path: String): ProjectInternal {
+        override fun createProject(path: String) {
             val projectPath = Path.path(path)
             val name = projectPath.name
-            return when {
-                name != null -> createProject(projectPath.parent, name)
-                else -> gradle.rootProject
-            }
-        }
-
-        private
-        fun InstantExecutionHost.createProject(parentPath: Path?, name: String): ProjectInternal {
             val projectDescriptor = DefaultProjectDescriptor(
-                getProjectDescriptor(parentPath),
-                name,
+                getProjectDescriptor(projectPath.parent),
+                name ?: rootProjectName,
                 rootDir,
                 projectDescriptorRegistry,
                 fileResolver
             )
-            return projectFactory.createProject(
-                gradle,
-                projectDescriptor,
-                getProject(parentPath),
-                coreAndPluginsScope.createChild(projectDescriptor.path),
-                coreAndPluginsScope
-            )
+            projectDescriptorRegistry.addProject(projectDescriptor)
         }
 
         override fun registerProjects() {
             // Ensure projects are registered for look up e.g. by dependency resolution
             service<ProjectStateRegistry>().registerProjects(service<BuildState>())
-
-            // Fire build operation required by build scans to determine build path (and settings execution time)
-            // It may be better to instead point GE at the origin build that produced the cached task graph,
-            // or replace this with a different event/op that carries this information and wraps some actual work
-            val buildOperationExecutor = service<BuildOperationExecutor>()
-            val settingsProcessor = BuildOperationSettingsProcessor(
-                PropertiesLoadingSettingsProcessor(
-                    SettingsProcessor { gradle, _, _, _ -> gradle.settings },
-                    service()
-                ),
-                buildOperationExecutor
-            )
-            val rootProject = gradle.rootProject
-            val settingsLocation = SettingsLocation(rootProject.projectDir, File(rootProject.projectDir, "settings.gradle"))
-            settingsProcessor.process(gradle, settingsLocation, coreAndPluginsScope, startParameter)
+            for (project in projectDescriptorRegistry.allProjects) {
+                projectFactory.createProject(gradle, project, getProject(project.path().parent), coreAndPluginsScope, coreAndPluginsScope)
+            }
+            gradle.rootProject = getProject(Path.ROOT)!!
+            gradle.defaultProject = gradle.rootProject
 
             // Fire build operation required by build scans to determine the build's project structure (and build load time)
+            val buildOperationExecutor = service<BuildOperationExecutor>()
             val buildLoader = NotifyingBuildLoader(BuildLoader { _, _ -> }, buildOperationExecutor)
             buildLoader.load(gradle.settings, gradle)
 
@@ -195,28 +156,6 @@ class InstantExecutionHost internal constructor(
         override fun getProject(path: String): ProjectInternal =
             gradle.rootProject.project(path)
 
-        override fun autoApplyPlugins() {
-            if (!startParameter.isBuildScan) {
-                return
-            }
-
-            // System properties are currently set as during settings script execution, so work around for now
-            // TODO - extract system properties setup into some that can be reused for instant execution
-            val buildScanUrl = getSystemProperty("com.gradle.scan.server")
-            if (buildScanUrl != null) {
-                System.setProperty("com.gradle.scan.server", buildScanUrl)
-            }
-
-            val rootProject = gradle.rootProject
-            val pluginRequests = service<AutoAppliedPluginRegistry>().getAutoAppliedPlugins(rootProject)
-            service<PluginRequestApplicator>().applyPlugins(
-                pluginRequests,
-                rootProject.buildscript,
-                rootProject.pluginManager,
-                rootProject.classLoaderScope
-            )
-        }
-
         override fun scheduleNodes(nodes: Collection<Node>) {
             gradle.taskGraph.run {
                 addNodes(nodes)
@@ -236,21 +175,67 @@ class InstantExecutionHost internal constructor(
         }
 
         private
-        fun createSettings(): SettingsInternal =
-            StringScriptSource("settings", "").let { settingsSource ->
+        fun processSettings(): SettingsInternal {
+            // Fire build operation required by build scans to determine build path (and settings execution time)
+            // It may be better to instead point GE at the origin build that produced the cached task graph,
+            // or replace this with a different event/op that carries this information and wraps some actual work
+            return BuildOperationSettingsProcessor(
+                SettingsProcessor { _, _, _, _ ->
+                    createSettings().also {
+                        applyAutoPluginRequestsTo(it)
+                    }
+                },
+                service()
+            ).process(
+                gradle,
+                SettingsLocation(rootDir, File(rootDir, "settings.gradle")),
+                gradle.classLoaderScope,
+                gradle.startParameter
+            )
+        }
+
+        private
+        fun createSettings(): SettingsInternal {
+
+            require(service<InstantExecutionPropertiesLoader>().hasLoaded) {
+                "Properties must have been loaded before Settings object can be created."
+            }
+
+            val baseClassLoaderScope = gradle.classLoaderScope
+            val classLoaderScope = baseClassLoaderScope.createChild("settings")
+            return StringScriptSource("settings", "").let { settingsSource ->
                 service<Instantiator>().newInstance(
                     DefaultSettings::class.java,
                     service<BuildScopeServiceRegistryFactory>(),
                     gradle,
-                    coreScope,
-                    coreScope,
-                    service<ScriptHandlerFactory>().create(settingsSource, coreScope),
+                    classLoaderScope,
+                    baseClassLoaderScope,
+                    service<ScriptHandlerFactory>().create(settingsSource, classLoaderScope),
                     rootDir,
                     settingsSource,
-                    startParameter
+                    gradle.startParameter
                 )
             }
+        }
+
+        private
+        fun applyAutoPluginRequestsTo(settingsInternal: SettingsInternal) {
+            service<PluginRequestApplicator>().applyPlugins(
+                autoAppliedPluginRequestsFor(settingsInternal),
+                settingsInternal.buildscript as ScriptHandlerInternal?,
+                settingsInternal.pluginManager,
+                settingsInternal.classLoaderScope
+            )
+        }
+
+        private
+        fun autoAppliedPluginRequestsFor(settingsInternal: SettingsInternal) =
+            service<AutoAppliedPluginRegistry>().getAutoAppliedPlugins(settingsInternal)
     }
+
+    private
+    val rootDir
+        get() = startParameter.rootDir
 
     private
     val coreScope: ClassLoaderScope
@@ -262,7 +247,7 @@ class InstantExecutionHost internal constructor(
 
     private
     fun getProject(parentPath: Path?) =
-        parentPath?.let { gradle.rootProject.project(it.path) }
+        parentPath?.let { service<DefaultProjectRegistry<ProjectInternal>>().getProject(it.path) }
 
     private
     fun getProjectDescriptor(parentPath: Path?): DefaultProjectDescriptor? =

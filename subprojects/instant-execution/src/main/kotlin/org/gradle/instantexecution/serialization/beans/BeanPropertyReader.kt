@@ -17,13 +17,14 @@
 package org.gradle.instantexecution.serialization.beans
 
 import org.gradle.api.GradleException
+import org.gradle.instantexecution.extensions.unsafeLazy
 import org.gradle.instantexecution.serialization.IsolateContext
 import org.gradle.instantexecution.serialization.PropertyKind
 import org.gradle.instantexecution.serialization.PropertyTrace
 import org.gradle.instantexecution.serialization.ReadContext
 import org.gradle.instantexecution.serialization.logPropertyInfo
 import org.gradle.instantexecution.serialization.logPropertyWarning
-import org.gradle.instantexecution.serialization.service
+import org.gradle.instantexecution.serialization.ownerService
 import org.gradle.instantexecution.serialization.withPropertyTrace
 import org.gradle.internal.instantiation.InstantiationScheme
 import org.gradle.internal.instantiation.InstantiatorFactory
@@ -48,12 +49,12 @@ class BeanPropertyReader(
     val fieldSetters = relevantStateOf(beanType).map { Pair(it.name, setterFor(it)) }
 
     private
-    val constructorForSerialization by lazy {
+    val constructorForSerialization by unsafeLazy {
         constructors.constructorForSerialization(beanType)
     }
 
     override suspend fun ReadContext.newBean(generated: Boolean) = if (generated) {
-        val services = isolate.owner.service<ServiceRegistry>()
+        val services = ownerService<ServiceRegistry>()
         instantiationScheme.withServices(services).deserializationInstantiator().newInstance(beanType, Any::class.java)
     } else {
         constructorForSerialization.newInstance()
