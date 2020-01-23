@@ -158,9 +158,7 @@ abstract class AbstractReadOnlyCacheDependencyResolutionTest extends AbstractHtt
     }
 
     void withReadOnlyCache() {
-        executer.withEnvironmentVars([
-            (ArtifactCachesProvider.READONLY_CACHE_ENV_VAR): roCacheDir.absolutePath
-        ])
+        executer.withReadOnlyCacheDir(roCacheDir)
         makeCacheReadOnly()
     }
 
