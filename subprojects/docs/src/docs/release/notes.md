@@ -49,14 +49,19 @@ Note that the cache should be primed and consumed by same Gradle version for max
 See [the documentation](userguide/dependency_resolution.html#sub:cache_copy) for more details. 
 
 <a name="compilation-order"></a>
-## Defining compilation order between Groovy, Scala and Java
+## Defining compilation order between JVM languages
 
-Previously, the relationship between Java, Groovy and Scala compilation was hardcoded with explicit task dependencies in the same project.
-Gradle assumed Groovy and Scala compilation would always depend on Java compilation. That is, `compileGroovy` and `compileScala` would directly depend on the output from `compileJava`.
+Gradle supports combining multiple JVM language in a single project, like mixing Scala and Java or Java, Groovy and Kotlin.
+Each language will have its own source set and compile task defined.
+Prior to Gradle 6.1, the compile task dependencies were defined in a way that made them hard to tweak.
+For example, it was complicated, and even impossible with Gradle 6.0, to make Kotlin code depend on Groovy code because of the explicit task dependencies declared by the Groovy plugin.
 
-These task dependencies have been remodelled using [directory properties](userguide/lazy_configuration.html#).  The relationship between compilation tasks is expressed in the task's classpath. Removing a directory property from the classpath also removes the corresponding task dependency.  This can be used to change the relationship between Java, Groovy and Scala compilation tasks.
+These task dependencies have been remodelled using [directory properties](userguide/lazy_configuration.html#).
+The relationship between compilation tasks is expressed through the classpath property of the tasks.
+Removing a directory property from a classpath also removes the corresponding task dependency.
+This can be used to change the relationship between Java, Groovy, Kotlin and Scala compilation tasks to whatever order is required by the project.
 
-For example, when combining Groovy and Kotlin in the same project, it was previously difficult to make Kotlin classes depend on Groovy classes.
+When combining Groovy and Kotlin in the same project, you can make Kotlin classes depend on Groovy classes like this:
 
 ```
 tasks.named('compileGroovy') {
@@ -66,7 +71,7 @@ tasks.named('compileGroovy') {
 }
 tasks.named('compileKotlin') {
     // Kotlin also depends on the result of Groovy compilation 
-    // which automatically makes it depend of compileGroovy
+    // which automatically makes it depend on compileGroovy
     classpath += files(sourceSets.main.groovy.classesDirectory)
 }
 ```
